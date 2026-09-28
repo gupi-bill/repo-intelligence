@@ -1,0 +1,102 @@
+name: ci
+
+on:
+  push:
+    # Both names, because the default branch is `main` on a fresh GitHub
+    # repository and `master` on a machine where git was configured before that
+    # convention changed. Listening for only one means CI silently never runs.
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: ['20', '22', '24']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # The whole point of this project is that there is nothing to install, so
+      # CI deliberately does not run `npm ci`. If a lockfile ever appears, this
+      # step is the signal that the zero-dependency property has been lost.
+      - name: assert there are no dependencies
+        run: |
+          if [ -f package-lock.json ] || [ -f yarn.lock ] || [ -d node_modules ]; then
+            echo "oc must have zero dependencies; found a lockfile or node_modules"
+            exit 1
+          fi
+
+      - name: lint
+        run: npm run lint
+
+      - name: test
+        run: npm test
+
+      - name: self-check
+        run: |
+          # oc must be able to analyse itself, on a repository with no commits
+          # of its own, without crashing.
+          node bin/oc.mjs . --no-color --width 100 > /dev/null || true
+          node bin/oc.mjs --version
+          node bin/oc.mjs --json --no-color . | head -c 200
+
+  shellcheck:
+    name: scripts parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: every file parses
+        run: |
+          find bin src test scripts -name '*.mjs' -print0 \
+            | xargs -0 -n1 node --check
+
+  bench:
+    name: benchmark oc itself
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      # Establishes a baseline to compare against on every commit. Not a gate:
+      # a noisy shared runner should not be able to block a pull request.
+      - name: bench
+        run: npm run bench -- .
+
+  no-color-clean:
+    name: no escape bytes without colour
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      # `--no-color` output is written to files, diffed and piped to `jq`, so it
+      # must contain no escape sequences at all -- not even bare resets.
+      - name: verify
+        run: |
+          node bin/oc.mjs . --no-color --width 100 > out.txt
+          if grep -qP '\x1b' out.txt; then
+            echo "found escape bytes in --no-color output:"
+            grep -nP '\x1b' out.txt | head
+            exit 1
+          fi
+          node bin/oc.mjs . --no-color --json | node -e \
+            "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{JSON.parse(s);console.log('json ok')})"
+          rm -f out.txt

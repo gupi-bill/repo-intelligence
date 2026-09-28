@@ -1,0 +1,49 @@
+{
+  "name": "oc",
+  "version": "1.0.0",
+  "description": "A zero-dependency terminal intelligence tool that reads your git history and tells you which files are dangerous, who owns what, and where your codebase is rotting.",
+  "type": "module",
+  "bin": {
+    "oc": "bin/oc.mjs"
+  },
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "files": [
+    "bin",
+    "src",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:watch": "node --test --watch test/*.test.mjs",
+    "lint": "node scripts/lint.mjs",
+    "check": "npm run lint && npm test",
+    "bench": "node scripts/bench.mjs",
+    "verify": "node scripts/verify-parser.mjs",
+    "oc": "node bin/oc.mjs"
+  },
+  "keywords": [
+    "git",
+    "metrics",
+    "churn",
+    "complexity",
+    "technical-debt",
+    "bus-factor",
+    "code-review",
+    "terminal",
+    "tui",
+    "cli",
+    "analytics",
+    "codebase",
+    "zero-dependencies"
+  ],
+  "license": "MIT",
+  "author": "oc contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/oc-cli/oc.git"
+  }
+}
