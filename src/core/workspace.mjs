@@ -18,7 +18,7 @@ import { shapeOf, measureCode, extractImports, releaseCode } from './scan.mjs';
  * @property {string} rel
  * @property {string} abs
  * @property {number} size
- * @property {number} mtimeMs
+ * @property {string} mtimeNs  modification time in nanoseconds; the cache identity
  * @property {string|null} language
  * @property {boolean} test
  * @property {boolean} vendor
@@ -73,15 +73,21 @@ export async function collectFiles(opts) {
     candidates.push(rel);
   }
 
+  // `bigint: true` asks for `mtimeNs`, which is the only field with enough
+  // precision to identify a file version. `Math.round(mtimeMs)` is not enough:
+  // a double at the current epoch has roughly a quarter-microsecond of
+  // resolution, so two saves inside one millisecond can share a rounded value
+  // and the cache would serve a stale analysis. CI caught this on macOS, where a
+  // filesystem with coarser timestamps collapsed several files onto one key.
   const statResults = await Promise.all(
     candidates.map(async (rel) => {
       const abs = join(root, rel);
       try {
-        const info = await stat(abs);
+        const info = await stat(abs, { bigint: true });
         if (!info.isFile()) return { rel, skip: 'not-regular' };
-        if (info.size === 0) return { rel, skip: 'empty' };
-        if (info.size > maxBytes) return { rel, skip: 'large', size: info.size };
-        return { rel, abs, size: info.size, mtimeMs: Math.round(info.mtimeMs) };
+        if (info.size === 0n) return { rel, skip: 'empty' };
+        if (info.size > BigInt(maxBytes)) return { rel, skip: 'large', size: Number(info.size) };
+        return { rel, abs, size: Number(info.size), mtimeNs: info.mtimeNs.toString() };
       } catch {
         return { rel, skip: 'missing' };
       }
@@ -101,7 +107,7 @@ export async function collectFiles(opts) {
       rel: result.rel,
       abs: result.abs,
       size: result.size,
-      mtimeMs: result.mtimeMs,
+      mtimeNs: result.mtimeNs,
       language: lang?.name ?? null,
       test: isTestPath(result.rel, lang),
       vendor: false,
@@ -129,7 +135,7 @@ export async function scanRecords({ records, cache, concurrency, onProgress, roo
   const pending = [];
 
   for (const record of records) {
-    const cached = await cache.get(record.rel, record.size, record.mtimeMs);
+    const cached = await cache.get(record.rel, record.size, record.mtimeNs);
     if (cached) {
       record.shape = cached;
       hits += 1;
@@ -173,7 +179,7 @@ export async function scanRecords({ records, cache, concurrency, onProgress, roo
       const record = pendingByRel.get(shape.rel);
       if (!record) continue;
       record.shape = shape;
-      await cache.put(record.rel, record.size, record.mtimeMs, shape);
+      await cache.put(record.rel, record.size, record.mtimeNs, shape);
     }
   }
 

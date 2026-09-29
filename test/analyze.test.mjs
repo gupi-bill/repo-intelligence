@@ -313,11 +313,15 @@ test('changing a file invalidates only that file in the cache', async (t) => {
   assert.equal(hits.misses, 0, 'everything was served from the cache');
   assert.equal(hits.hits, records.length);
 
-  // Touch one file, and exactly one file is re-measured.
+  // Touch one file, and exactly one file is re-measured. A whole millisecond
+  // forward: `utimes` is specified to millisecond precision, so anything finer
+  // would silently become a no-op on some filesystems and pass for the wrong
+  // reason.
   const { stat, utimes } = await import('node:fs/promises');
   const target = `${dir}/src/b.js`;
-  const info = await stat(target);
-  await utimes(target, info.atime, new Date(Date.now() + 4000));
+  const info = await stat(target, { bigint: true });
+  const bumped = new Date(Number(info.mtimeNs / 1000000n) + 1);
+  await utimes(target, bumped, bumped);
   const third = new Cache({ enabled: true, version: 'test-fp', fingerprint: 'fp' });
   const { records: thirdRecords } = await collectFiles({ root: dir });
   await scanRecords({ records: thirdRecords, cache: third });
@@ -528,4 +532,42 @@ test('an exclusion outranks the built-in vendor rule', async (t) => {
   assert.equal(dropped.records.length, 0);
   assert.equal(dropped.skipped.excluded, 1, 'reported as user-excluded, not as vendor');
   assert.equal(dropped.skipped.vendor, 0);
+});
+
+test('cache identity distinguishes edits that share a millisecond', () => {
+  // The bug CI caught on macOS. Rounding `mtimeMs` to an integer collapses
+  // sub-millisecond differences, so two saves inside one millisecond could
+  // share a cache key and be served a stale analysis. Cache identity is a pure
+  // function of its inputs, so it is tested directly rather than through a
+  // filesystem whose timestamp granularity varies by platform.
+  const cache = new Cache({ enabled: false });
+  const withinOneMillisecond = [
+    '1790682006505000114', // 1790682006505.000114 ms
+    '1790682006505000999', // 1790682006505.000999 ms
+    '1790682006505999999', // 1790682006505.999999 ms
+  ];
+  const keys = new Set(withinOneMillisecond.map((mtime) => cache.keyFor('a.js', 100, mtime)));
+  assert.equal(keys.size, withinOneMillisecond.length,
+    'every distinct modification time gets its own key');
+
+  // Rounded to whole milliseconds these would have collapsed to two values, and
+  // the first and third would have been indistinguishable.
+  const rounded = new Set(withinOneMillisecond.map((m) => String(Math.round(Number(BigInt(m) / 1000n)))));
+  assert.ok(rounded.size < withinOneMillisecond.length,
+    'which is exactly what the old rounding-based key lost');
+
+  // Identity must be stable, and must still depend on every input.
+  assert.equal(cache.keyFor('a.js', 100, 'x'), cache.keyFor('a.js', 100, 'x'));
+  assert.notEqual(cache.keyFor('a.js', 100, 'x'), cache.keyFor('a.js', 101, 'x'), 'size matters');
+  assert.notEqual(cache.keyFor('a.js', 100, 'x'), cache.keyFor('b.js', 100, 'x'), 'path matters');
+});
+
+test('the fingerprint still invalidates everything it used to', () => {
+  // Re-asserted after the key change, because the two interact: a key that
+  // forgot the fingerprint would make every measurement-code change invisible.
+  const a = new Cache({ enabled: false, version: 'v1', fingerprint: 'scanner-A' });
+  const b = new Cache({ enabled: false, version: 'v1', fingerprint: 'scanner-B' });
+  assert.notEqual(a.keyFor('x', 1, '2'), b.keyFor('x', 1, '2'));
+  const c = new Cache({ enabled: false, version: 'v2', fingerprint: 'scanner-A' });
+  assert.notEqual(a.keyFor('x', 1, '2'), c.keyFor('x', 1, '2'));
 });

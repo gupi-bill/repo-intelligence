@@ -119,10 +119,17 @@ export class Cache {
     this.errors = 0;
   }
 
-  /** Stable cache key for one file's analysis. */
-  keyFor(rel, size, mtimeMs) {
+  /**
+   * Stable cache key for one file's analysis.
+   *
+   * `mtime` is the nanosecond string rather than a rounded millisecond number,
+   * so two edits within the same millisecond produce different keys. Rounding
+   * here is what made CI fail on macOS, and it would equally have served a stale
+   * analysis to anyone saving a file twice in quick succession.
+   */
+  keyFor(rel, size, mtime) {
     const hash = createHash('sha1');
-    hash.update(`${this.version}\u0000${this.fingerprint}\u0000${rel}\u0000${size}\u0000${mtimeMs}`);
+    hash.update(`${this.version}\u0000${this.fingerprint}\u0000${rel}\u0000${size}\u0000${mtime}`);
     return hash.digest('base64url').slice(0, 22);
   }
 
@@ -156,12 +163,12 @@ export class Cache {
     return shard;
   }
 
-  async get(rel, size, mtimeMs) {
+  async get(rel, size, mtime) {
     if (!this.enabled) {
       this.misses += 1;
       return undefined;
     }
-    const key = this.keyFor(rel, size, mtimeMs);
+    const key = this.keyFor(rel, size, mtime);
     const shard = await this.load(this.shardFor(rel).prefix);
     if (shard.entries.has(key)) {
       this.hits += 1;
@@ -171,9 +178,9 @@ export class Cache {
     return undefined;
   }
 
-  async put(rel, size, mtimeMs, value) {
+  async put(rel, size, mtime, value) {
     if (!this.enabled || this.readonly) return;
-    const key = this.keyFor(rel, size, mtimeMs);
+    const key = this.keyFor(rel, size, mtime);
     const shard = this.shardFor(rel);
     if (!shard.loaded) await this.load(shard.prefix);
     shard.entries.set(key, value);
