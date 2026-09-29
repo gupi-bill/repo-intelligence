@@ -283,7 +283,7 @@ export function buildReport({ records, history, coupling, now, limit = 20 }) {
       firstDay: author.firstDay,
       lastDay: author.lastDay,
       tenureDays: author.firstDay > 0 ? author.lastDay - author.firstDay : 0,
-      files: author.files.size,
+      files: author.fileCount,
       lines: author.adds + author.dels,
       lastActive: recentDays,
       lastActiveLabel: recentDays <= 30 ? 'active' : recentDays <= 180 ? 'recent' : recentDays <= 365 ? 'lurking' : 'dormant',
@@ -519,7 +519,7 @@ export function buildTimeline(history, today, months = 26) {
       commits: entry?.commits ?? 0,
       merges: entry?.merges ?? 0,
       authors: entry?.authors.size ?? 0,
-      files: entry?.files.size ?? 0,
+      files: entry?.fileCount ?? 0,
       adds: entry?.adds ?? 0,
       dels: entry?.dels ?? 0,
     };

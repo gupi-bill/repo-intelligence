@@ -266,6 +266,64 @@ real terminals send: CSI (`\x1b[A`), SS3 (`\x1bOA`), the numeric-tilde family
 wrong capture group out of the sequence regex — produces zero keys, which is
 indistinguishable from a dead keyboard and would never be caught by inspection.
 
+## What the profiler actually said
+
+Optimisation here was measurement-driven, not guesswork, and the first two
+guesses were both wrong:
+
+- *"`Map` is slow for the per-file author and month maps."* Rebenchmarked in
+  isolated processes, `Map` and a null-prototype object were indistinguishable
+  (925ms vs 951ms for 350,000 keyed increments). No change made.
+- *"The `Date.parse` call is a fixed cost."* True, but the real finding was that
+  it is a **repeatable** cost: a 45,260-commit history contains 1,159 distinct
+  dates and 1,512 distinct author identities. Memoising both removed 97% of the
+  calls.
+
+What CPU profiling actually attributed the time to, on the 45k-commit
+repository:
+
+| | Share of aggregation |
+| --- | --- |
+| `History#add` | 41% |
+| `History#file` | 18% |
+| the stream parser | 11% |
+| garbage collection | 9% |
+| `toDayIndex` | 5% |
+
+Three changes came out of that, each measured in isolation afterwards:
+
+1. **Memoise `toDayIndex` and `authorKey`.** 45,260 calls collapse to 1,159 and
+   1,512 distinct results.
+2. **Stop maintaining two Sets of paths.** `author.files` and `month.files`
+   existed only to answer `.size`, cost 349,967 insertions of long path strings
+   between them, and held roughly 700,000 entries in the heap for it. The
+   identical information is already present as `file.authors` and `file.months` —
+   the exact transpose — so the counts are now derived in one pass over the file
+   table: 34,186 short iterations replacing 349,967 long-string insertions, and
+   40% less peak heap in that stage.
+3. **Narrow the import-probe candidate list and memoise the ancestor list.**
+   `probe` was 16% of the whole analysis, and it was being handed 20 extensions
+   and 10 `index.*` names for every candidate base directory, up to eight of them
+   per specifier. The candidate lists are now derived from the extensions the
+   repository actually contains, and the per-file ancestor list is computed once
+   instead of once per import.
+
+Measured, alternating runs to cancel machine-load drift, on the reference
+repository:
+
+| Stage | Before | After | Change |
+| --- | --- | --- | --- |
+| history aggregation | 1887-1949 ms | 1366-1470 ms | -26% |
+| coupling (2,650-file sample) | 1229-1414 ms | 525-533 ms | -59% |
+| aggregation peak heap | 334 MB | 200 MB | -40% |
+
+**The output is byte-identical before and after.** Verified by diffing a
+projection of the full report -- health grade, every hot-spot path and score,
+cycle list, undeclared dependencies, test reach, totals, author count, bus
+factor, timeline totals and per-month file counts -- across the whole reference
+repository. An optimisation that changes what the tool says is a regression, and
+this one is checked rather than assumed.
+
 ## Growth
 
 Memory is proportional to the number of distinct files ever touched, not to the

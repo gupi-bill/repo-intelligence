@@ -213,11 +213,33 @@ export function measureBuffer(buf, record) {
   }
 }
 
-/** Convenience: build a lookup index over records for import resolution. */
+/** Extensions probed when an import omits one, in preference order. */
+const PROBE_EXT = [
+  '.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs',
+  '.py', '.go', '.rs', '.rb', '.java', '.kt', '.cs', '.php', '.vue', '.svelte', '.dart',
+];
+
+const INDEX_NAMES = [
+  'index.ts', 'index.tsx', 'index.js', 'index.jsx', 'index.mjs',
+  'index.py', 'index.vue', 'index.go', 'index.rs', 'index.dart',
+];
+
+/**
+ * Convenience: build a lookup index over records for import resolution.
+ *
+ * Besides the path lookup itself, this precomputes the *probe candidates*:
+ * the subset of extensions and `index.*` names that actually exist in this
+ * repository. Import resolution tries each candidate against every candidate
+ * base directory, and that inner loop is the hottest code in the analysis --
+ * probing 20 extensions for a repository that only ever uses `.py` and `.ts`
+ * is 10x the work for no chance of a hit.
+ */
 export function buildIndex(records) {
   const byPath = new Map();
   const byStem = new Map();
   const byDirIndex = new Map();
+  const presentExt = new Set();
+  const presentIndex = new Set();
   for (const record of records) {
     byPath.set(record.rel, record);
     const slash = record.rel.lastIndexOf('/');
@@ -229,6 +251,27 @@ export function buildIndex(records) {
     const dir = slash === -1 ? '' : record.rel.slice(0, slash);
     if (!byDirIndex.has(dir)) byDirIndex.set(dir, []);
     byDirIndex.get(dir).push(record);
+    if (dot > 0) presentExt.add(base.slice(dot));
   }
-  return { byPath, byStem, byDirIndex, size: records.length };
+  // A repository "has" an index file if any tracked path ends with it, so build
+  // the suffix set in one pass rather than rescanning every path per name.
+  for (const path of byPath.keys()) {
+    const slash = path.lastIndexOf('/');
+    const base = slash === -1 ? path : path.slice(slash + 1);
+    if (base.startsWith('index.')) presentIndex.add(base);
+  }
+
+  // Keep the canonical preference order, not discovery order, so a hit is the
+  // same one the full list would have produced.
+  const probeExtensions = PROBE_EXT.filter((ext) => presentExt.has(ext));
+  const probeIndexes = INDEX_NAMES.filter((name) => presentIndex.has(name));
+
+  return {
+    byPath,
+    byStem,
+    byDirIndex,
+    probeExtensions: probeExtensions.length > 0 ? probeExtensions : PROBE_EXT,
+    probeIndexes,
+    size: records.length,
+  };
 }

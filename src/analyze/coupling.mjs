@@ -16,11 +16,20 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { languageFor } from '../core/lang.mjs';
 
-/** Extensions probed when an import omits one. */
+/**
+ * Extensions probed when an import omits one, in preference order.
+ *
+ * This is the full candidate set. A repository only ever needs the subset it
+ * actually contains, and `probeCandidates()` narrows it at run time: trying 20
+ * extensions for a Python-only import is 20 wasted string allocations and map
+ * lookups, and `probe` is the hottest function in the whole analysis.
+ */
 const PROBE_EXT = [
   '.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs',
   '.py', '.go', '.rs', '.rb', '.java', '.kt', '.cs', '.php', '.vue', '.svelte', '.dart',
 ];
+
+/** Directories that are as likely to hold the module as a sibling file. */
 const INDEX_NAMES = [
   'index.ts', 'index.tsx', 'index.js', 'index.jsx', 'index.mjs',
   'index.py', 'index.vue', 'index.go', 'index.rs', 'index.dart',
@@ -131,27 +140,46 @@ export function resolve(spec, fromRel, index) {
  * the specifier is a package name and further probing is wasted work.
  */
 function importerBases(fromRel) {
+  // Memoised: a file with ten imports would otherwise rebuild the same ancestor
+  // list ten times, each time re-slicing and re-joining every path segment.
+  const cached = baseCache.get(fromRel);
+  if (cached !== undefined) return cached;
   const parts = fromRel.split('/');
   parts.pop(); // drop the filename
   const bases = [];
   for (let i = parts.length; i >= 0; i -= 1) {
-    bases.push(parts.slice(0, i).join('/'));
+    let base = '';
+    for (let j = 0; j < i; j += 1) {
+      base = j === 0 ? parts[j] : `${base}/${parts[j]}`;
+    }
+    bases.push(base);
     if (parts.length - i > 6) break;
   }
   // A conventional source root is a strong final guess for monorepos.
   if (!bases.includes('src')) bases.push('src');
+  if (baseCache.size < 100000) baseCache.set(fromRel, bases);
   return bases;
+}
+
+/** Per-file memo of `importerBases`, cleared between runs by `clearBaseCache`. */
+const baseCache = new Map();
+
+export function clearBaseCache() {
+  baseCache.clear();
 }
 
 /** Try every conventional shape for a path that may omit its extension. */
 function probe(base, index) {
   const trimmed = base.replace(/\/+$/, '');
   if (index.byPath.has(trimmed)) return trimmed;
-  for (const ext of PROBE_EXT) {
-    if (index.byPath.has(trimmed + ext)) return trimmed + ext;
+  const extensions = index.probeExtensions ?? PROBE_EXT;
+  for (let i = 0; i < extensions.length; i += 1) {
+    const candidate = trimmed + extensions[i];
+    if (index.byPath.has(candidate)) return candidate;
   }
-  for (const name of INDEX_NAMES) {
-    const candidate = `${trimmed}/${name}`;
+  const indexNames = index.probeIndexes ?? INDEX_NAMES;
+  for (let i = 0; i < indexNames.length; i += 1) {
+    const candidate = `${trimmed}/${indexNames[i]}`;
     if (index.byPath.has(candidate)) return candidate;
   }
   // Deliberately no basename fallback. Matching a bare specifier to *any* file

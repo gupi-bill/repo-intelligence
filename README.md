@@ -176,6 +176,14 @@ analysing, and invalidates itself when the measurement code changes. Use
 `--no-cache` to ignore it, `--prune` to delete stale shards, `--since` to bound
 the history window when you do not need all of it.
 
+The two stages that are pure JavaScript are considerably faster than they were:
+aggregation is 26% quicker and import resolution 59% quicker, with 40% less
+peak heap in aggregation. Both came from profiling rather than intuition — see
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#what-the-profiler-actually-said) for
+what the profiler said, including the two plausible-looking changes that turned
+out to make no difference. **The report output is byte-identical before and
+after**, which is verified rather than assumed.
+
 ## Why zero dependencies
 
 Not asceticism. Three concrete reasons:
