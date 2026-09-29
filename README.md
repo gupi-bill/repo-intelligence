@@ -87,8 +87,8 @@ named contributions, so a claim can always be checked:
 ## Install
 
 ```sh
-git clone <this repo> oc
-cd oc
+git clone https://github.com/gupi-bill/repo-intelligence.git
+cd repo-intelligence
 node bin/oc.mjs --help
 ```
 

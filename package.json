@@ -44,6 +44,10 @@
   "author": "oc contributors",
   "repository": {
     "type": "git",
-    "url": "https://github.com/oc-cli/oc.git"
+    "url": "https://github.com/gupi-bill/repo-intelligence.git"
+  },
+  "homepage": "https://github.com/gupi-bill/repo-intelligence#readme",
+  "bugs": {
+    "url": "https://github.com/gupi-bill/repo-intelligence/issues"
   }
 }
