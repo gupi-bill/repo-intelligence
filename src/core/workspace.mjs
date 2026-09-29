@@ -34,19 +34,34 @@ import { shapeOf, measureCode, extractImports, releaseCode } from './scan.mjs';
  * @param {string[]} [opts.pathspec]
  * @param {boolean} [opts.includeVendor]
  * @param {number} [opts.maxBytes]
- * @returns {Promise<{records: FileRecord[], scanned: number, skipped: {vendor: number, binary: number, large: number}}>}
+ * @param {string[]} [opts.exclude]  user-supplied path substrings to skip
+ * @returns {Promise<{records: FileRecord[], scanned: number, total: number, skipped: object}>}
  */
 export async function collectFiles(opts) {
-  const { root, includeUntracked = false, pathspec = [], includeVendor = false, maxBytes = 1_500_000 } = opts;
+  const {
+    root, includeUntracked = false, pathspec = [], includeVendor = false,
+    maxBytes = 1_500_000, exclude = [],
+  } = opts;
   let rels = await trackedFiles(root, pathspec);
   if (includeUntracked) rels = rels.concat(await untrackedFiles(root));
 
+  const total = rels.length;
   const records = [];
-  const skipped = { vendor: 0, binary: 0, large: 0, missing: 0 };
+  // Every path that was considered and not analysed, with a reason. Reported in
+  // the footer, because a metric that silently drops a third of the repository
+  // is a metric nobody should trust.
+  const skipped = { vendor: 0, binary: 0, large: 0, missing: 0, excluded: 0, empty: 0, other: 0 };
   // Vendor trees are skipped without a stat(): they are never interesting and
   // there can be tens of thousands of them.
   const candidates = [];
+  const excludes = exclude.filter((e) => e !== '');
   for (const rel of rels) {
+    // A user-supplied exclusion outranks every built-in rule: it is the only one
+    // that can know where *this* repository keeps its third-party code.
+    if (excludes.some((needle) => rel.includes(needle))) {
+      skipped.excluded += 1;
+      continue;
+    }
     if (!includeVendor && isVendorPath(rel)) {
       skipped.vendor += 1;
       continue;
@@ -77,6 +92,8 @@ export async function collectFiles(opts) {
     if (result.skip) {
       if (result.skip === 'large') skipped.large += 1;
       else if (result.skip === 'missing') skipped.missing += 1;
+      else if (result.skip === 'empty') skipped.empty += 1;
+      else skipped.other += 1;
       continue;
     }
     const lang = languageFor(result.rel);
@@ -94,7 +111,7 @@ export async function collectFiles(opts) {
   }
 
   records.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
-  return { records, scanned: records.length, skipped };
+  return { records, scanned: records.length, total, skipped };
 }
 
 /**

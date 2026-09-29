@@ -461,3 +461,71 @@ test('a fingerprint that cannot read its inputs fails loudly', async () => {
   assert.equal(sources.filter((s) => !s.found).length, 0,
     'every measurement module must be readable from src/core/');
 });
+
+test('excluded paths are skipped and accounted for, not silently dropped', async (t) => {
+  const { dir, cleanup } = await makeFixture(async (git, d) => {
+    await write(d, 'src/a.js', 'export const a = 1;\n');
+    await write(d, 'node_modules/pkg/index.js', 'export const p = 1;\n');
+    // `public/vs` is the shape used by projects that copy a third-party editor
+    // (Monaco and friends) into a static directory: it is not under a directory
+    // name oc recognises, which is exactly why --exclude has to exist.
+    await write(d, 'web/public/vs/language/js.js', 'export const v = 1;\n');
+    await write(d, 'logo.png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]));
+    await git(['add', '-A']);
+    await git(['commit', '-q', '-m', 'first']);
+  });
+  t.after(cleanup);
+
+  const base = await collectFiles({ root: dir });
+  assert.equal(base.total, 4, 'every tracked path is accounted for');
+  assert.equal(base.records.length, 2, 'our source and the unrecognised vendored copy');
+  assert.equal(base.skipped.vendor, 1, 'node_modules is skipped');
+  assert.equal(base.skipped.binary, 1, 'the png is skipped');
+
+  const excluded = await collectFiles({ root: dir, exclude: ['/public/'] });
+  assert.equal(excluded.records.length, 1, 'the excluded path is gone');
+  assert.equal(excluded.skipped.excluded, 1, 'and it is reported as excluded');
+  assert.equal(excluded.total, 4, 'the denominator is unchanged');
+
+  // Every path lands in exactly one bucket: analysed, or skipped with a reason.
+  const skippedTotal = Object.values(excluded.skipped).reduce((a, b) => a + b, 0);
+  assert.equal(excluded.records.length + skippedTotal, excluded.total,
+    'nothing is dropped without a reason');
+});
+
+test('a directory literally named vendor is treated as vendored', async (t) => {
+  // Deliberate. `vendor/` is where cargo, composer and bundlers put third-party
+  // code, so the rule matches the name wherever it appears. A project that keeps
+  // its own code there can say so with --include-vendor, and the footer always
+  // reports how many files were dropped as vendored.
+  const { dir, cleanup } = await makeFixture(async (git, d) => {
+    await write(d, 'vendor/ours/thing.js', 'export const t = 1;\n');
+    await git(['add', '-A']);
+    await git(['commit', '-q', '-m', 'first']);
+  });
+  t.after(cleanup);
+
+  const skipped = await collectFiles({ root: dir });
+  assert.equal(skipped.records.length, 0);
+  assert.equal(skipped.skipped.vendor, 1);
+
+  const kept = await collectFiles({ root: dir, includeVendor: true });
+  assert.equal(kept.records.length, 1, '--include-vendor overrides it');
+});
+
+test('an exclusion outranks the built-in vendor rule', async (t) => {
+  const { dir, cleanup } = await makeFixture(async (git, d) => {
+    await write(d, 'node_modules/pkg/index.js', 'export const p = 1;\n');
+    await git(['add', '-A']);
+    await git(['commit', '-q', '-m', 'first']);
+  });
+  t.after(cleanup);
+
+  const kept = await collectFiles({ root: dir, includeVendor: true, exclude: [] });
+  assert.equal(kept.records.length, 1, '--include-vendor keeps it');
+
+  const dropped = await collectFiles({ root: dir, includeVendor: true, exclude: ['node_modules'] });
+  assert.equal(dropped.records.length, 0);
+  assert.equal(dropped.skipped.excluded, 1, 'reported as user-excluded, not as vendor');
+  assert.equal(dropped.skipped.vendor, 0);
+});

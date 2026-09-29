@@ -106,8 +106,35 @@ function renderHeader(theme, W, report, meta) {
   if (meta.window) pathLine.push(theme.c('faint', `${theme.g.mid} window ${meta.window}`));
   if (meta.windowNote) pathLine.push(theme.c('warn', `${theme.g.mid} ${meta.windowNote}`));
   out.push(joinLine(pathLine, W, theme));
+
+  // Say what was left out. A score computed from 70% of a repository, with the
+  // other 30% silently dropped, is a number with no stated meaning.
+  const scope = scopeNote(theme, meta, W);
+  if (scope) out.push(scope);
   out.push('');
   return out;
+}
+
+/** One line describing which files were analysed and which were skipped. */
+function scopeNote(theme, meta, W) {
+  const { scanned, total, skipped } = meta.scope ?? {};
+  if (!scanned) return null;
+  const parts = [`${formatInt(scanned)} of ${formatInt(total ?? scanned)} tracked files analysed`];
+  const reasons = [
+    ['excluded', 'excluded by --exclude', 'warn'],
+    ['vendor', 'vendored', null],
+    ['binary', 'binary', null],
+    ['large', 'over the size limit', null],
+    ['missing', 'missing from disk', 'warn'],
+  ];
+  for (const [key, label, colour] of reasons) {
+    const n = skipped?.[key];
+    if (n > 0) parts.push(theme.c(colour ?? 'faint', `${formatInt(n)} ${label}`));
+  }
+  if (parts.length === 1) return truncate(theme.c('faint', parts[0]), W, theme.g.ellipsis);
+  const head = theme.c('faint', parts[0]);
+  const tail = parts.slice(1).join(theme.c('faint', ` ${theme.g.mid} `));
+  return truncate(`${head}${theme.c('faint', ` ${theme.g.mid} `)}${tail}`, W, theme.g.ellipsis);
 }
 
 function joinLine(parts, W, theme) {
@@ -351,7 +378,7 @@ function renderStructure(theme, W, report, limit) {
     for (const cluster of clusters.slice(0, 2)) {
       out.push('');
       out.push('    ' + theme.c('warn', theme.bold(`${cluster.length} files form one dependency cluster`)));
-      out.push('      ' + theme.c('faint', 'Mutually reachable, so nothing here can be extracted in isolation.'));
+      out.push('      ' + truncate(theme.c('faint', 'Mutually reachable, so nothing here can be extracted in isolation.'), W - 6, theme.g.ellipsis));
       out.push('      ' + theme.c('faint', 'Most depended upon inside the cluster:'));
       const inside = new Set(cluster);
       const ranked = cluster
@@ -360,9 +387,14 @@ function renderStructure(theme, W, report, limit) {
         .sort((a, b) => b[1] - a[1])
         .slice(0, 4);
       for (const [path, count] of ranked) {
+        // Budget from the suffix outward: the count is variable-width, so a
+        // fixed allowance is off by however many digits it happens to have.
+        const suffix = `  ${count} in-cluster importers`;
+        // 8 spaces of indent, the tree glyph, then a separating space.
+        const prefixWidth = 10;
         out.push('        ' + theme.c('muted', theme.g.tree) + ' '
-          + theme.c('text', truncatePath(path, W - 24, theme.g.ellipsis))
-          + theme.c('faint', `  ${count} in-cluster importers`));
+          + theme.c('text', truncatePath(path, Math.max(8, W - prefixWidth - width(suffix)), theme.g.ellipsis))
+          + theme.c('faint', suffix));
       }
       void inside;
     }

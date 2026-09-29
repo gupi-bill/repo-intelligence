@@ -42,6 +42,7 @@ export const FLAGS = [
   { name: 'path', type: 'string', describe: 'restrict the analysis to a pathspec' },
   { name: 'include-untracked', type: 'boolean', describe: 'also scan untracked files' },
   { name: 'include-vendor', type: 'boolean', describe: 'do not skip vendored directories' },
+  { name: 'exclude', type: 'string', describe: 'skip paths matching a substring (repeatable)' },
   { name: 'no-cache', type: 'boolean', describe: 'ignore and do not write the cache' },
   { name: 'cache-dir', type: 'string', describe: 'override the cache directory' },
   { name: 'prune', type: 'boolean', describe: 'delete stale cache entries and exit' },
@@ -106,6 +107,9 @@ export function parseArgs(argv) {
       const parsed = Number(value);
       if (!Number.isFinite(parsed)) throw new UsageError(`option --${flag.name} needs a number, got ${JSON.stringify(value)}`);
       options[flag.name] = parsed;
+    } else if (flag.name === 'exclude') {
+      // Repeatable: `--exclude a --exclude b` accumulates.
+      (options.exclude ??= []).push(value);
     } else {
       options[flag.name] = value;
     }
@@ -268,11 +272,13 @@ export async function main(argv, io = {}) {
   const theme = new Theme(caps.depth, caps.unicode);
   const meta = {
     repoName: basename(found.root) || found.root,
+    scope: report.meta.scope,
     root: relative(cwd, found.root) || '.',
     branch: head.branch,
     head: head.hash,
     elapsed: phases.report,
     cacheHitRate: report.meta.cacheHitRate,
+    scope: report.meta.scope,
     mode: options.lines ? 'full history + line churn' : 'full history',
     window: options.since ?? 'all time',
   };
@@ -445,11 +451,12 @@ export async function analyse({ found, head, options = {}, cache, mark = () => {
   // of a repository between `git init` and the first commit, so fall back to
   // what is actually on disk.
   const hasCommits = Boolean(head?.hash);
-  const { records, skipped } = await collectFiles({
+  const { records, skipped, total: totalTracked } = await collectFiles({
     root,
     includeUntracked: options['include-untracked'] ?? !hasCommits,
     pathspec: options.path ? [options.path] : [],
     includeVendor: options['include-vendor'] ?? false,
+    exclude: options.exclude ?? [],
   });
   mark('collect');
   progress?.end(`${records.length} files`);
@@ -538,6 +545,11 @@ export async function analyse({ found, head, options = {}, cache, mark = () => {
     cacheHits: scan.hits,
     filesScanned: scan.scanned,
     head: head?.hash ?? null,
+    scope: {
+      scanned: records.length,
+      total: totalTracked,
+      skipped,
+    },
   };
   return report;
 }

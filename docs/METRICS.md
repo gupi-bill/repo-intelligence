@@ -219,6 +219,14 @@ an invented one.
 Vendored directories are excluded from the graph. Depending on `node_modules` is
 not an architectural signal.
 
+A directory literally named `vendor` is treated as vendored wherever it appears,
+which is right for cargo, composer and bundler layouts and wrong for a project
+that keeps its own code there. `--include-vendor` overrides it, and the scope
+line in the report always states how many files were dropped and why. Nothing is
+dropped silently, which is the property that actually matters here: a project
+that copies a third-party editor into `public/` cannot be recognised
+automatically, and `--exclude` is how you tell oc about it.
+
 ---
 
 ## Debt

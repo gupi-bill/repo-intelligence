@@ -8,6 +8,7 @@ import { analyse } from '../src/cli.mjs';
 import { Cache } from '../src/core/cache.mjs';
 import { discoverRepo } from '../src/core/git.mjs';
 import { width, stripAnsi } from '../src/render/ansi.mjs';
+import { renderReport } from '../src/render/report.mjs';
 
 // ---------------------------------------------------------------------------
 // Key parsing
@@ -619,4 +620,55 @@ test('a repository with nothing in it fails with a useful message', async (t) =>
   assert.equal(code, 1);
   assert.match(err, /no commits and no files/);
   assert.match(err, /make a commit/);
+});
+
+test('no report line ever exceeds the terminal, at any width or colour depth', () => {
+  // A long-standing manual check that kept getting forgotten, and a regression it
+  // would have caught immediately: fixed-width prose inside a layout that is
+  // otherwise fully budgeted. Kept here so it cannot drift again.
+  const base = fakeReport();
+  const report = {
+    ...base,
+    languages: [{
+      name: 'TypeScript', files: 20, code: 800, comment: 50, blank: 100,
+      total: 950, testFiles: 4, sourceFiles: 16, decisions: 120, bytes: 16000, debt: 2,
+    }],
+    ownership: { ...base.ownership, orphanFiles: [], staleFiles: [], singleOwner: [] },
+    coupling: {
+      ...base.coupling,
+      // A large component, which renders a different set of lines than a small one.
+      cycles: [Array.from({ length: 400 }, (_, i) => `api/controllers/console/feature/very/deeply/nested/module_${i}.py`)],
+      cycleFileCount: 400,
+      fanIn: new Map(Array.from({ length: 400 }, (_, i) => [
+        `api/controllers/console/feature/very/deeply/nested/module_${i}.py`,
+        2000 - i * 3,
+      ])),
+    },
+    meta: {
+      scope: { scanned: 12345, total: 13999, skipped: { excluded: 900, vendor: 12, binary: 67, large: 3, missing: 1, empty: 4, other: 0 } },
+    },
+  };
+  const meta = {
+    repoName: 'a-rather-long-repository-name',
+    root: '../some/relatively/long/path/to/a/repository',
+    branch: 'feature/some-branch',
+    head: 'abc1234def5678',
+    window: 'all time',
+    elapsed: 1234,
+    cacheHitRate: 0.5,
+    scope: report.meta.scope,
+  };
+  for (const W of [60, 72, 80, 100, 132, 200]) {
+    for (const depth of [0, 1, 2, 3]) {
+      for (const unicode of [true, false]) {
+        const out = renderReport(report, {
+          theme: new Theme(depth, unicode), width: W, meta, limit: 12,
+        });
+        out.split('\n').forEach((line, i) => {
+          assert.ok(width(line) <= W,
+            `W=${W} depth=${depth} unicode=${unicode} line ${i} is ${width(line)} wide: ${JSON.stringify(stripAnsi(line))}`);
+        });
+      }
+    }
+  }
 });

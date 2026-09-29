@@ -110,7 +110,20 @@ oc --since 6.months.ago  # recent history only
 oc --lang python          # restrict to one language
 oc --watch                # re-analyse on every change
 oc --no-color > out.txt   # clean output for a file or a PR comment
+oc --exclude /public/ --exclude web/app   # drop paths you know are not yours
 ```
+
+Every run states its own scope, because a score computed from 70% of a
+repository is a number with no stated meaning:
+
+```
+13,249 of 13,636 tracked files analysed · 8 vendored · 67 binary · 3 over the size limit
+```
+
+`--exclude` exists because every project keeps third-party code somewhere
+different. `node_modules`, `vendor`, `dist` and friends are recognised
+automatically; a project that copies an editor or a library into `public/` needs
+to say so, and `--include-vendor` is the escape hatch in the other direction.
 
 ### Interactive mode
 
