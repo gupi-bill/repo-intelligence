@@ -7,7 +7,7 @@ import { discoverRepo } from '../src/core/git.mjs';
 import { History, toDayIndex, toMonth, authorKey } from '../src/analyze/history.mjs';
 import { buildCoupling, findCycles, resolve, externalName } from '../src/analyze/coupling.mjs';
 import { buildIndex, collectFiles, scanRecords } from '../src/core/workspace.mjs';
-import { RISK_WEIGHTS } from '../src/analyze/report.mjs';
+import { RISK_WEIGHTS, buildTimeline } from '../src/analyze/report.mjs';
 
 /**
  * A repository with a known shape, so every assertion below is against a fact
@@ -570,4 +570,58 @@ test('the fingerprint still invalidates everything it used to', () => {
   assert.notEqual(a.keyFor('x', 1, '2'), b.keyFor('x', 1, '2'));
   const c = new Cache({ enabled: false, version: 'v2', fingerprint: 'scanner-A' });
   assert.notEqual(a.keyFor('x', 1, '2'), c.keyFor('x', 1, '2'));
+});
+
+test('the timeline window ends on the local calendar month, not the UTC one', () => {
+  // Regression: the window used to be derived from `Math.floor(Date.now() /
+  // MS_PER_DAY)` plus getUTC*(). Commit months come from git's YYYY-MM-DD,
+  // which git renders in local time. At 00:30 on 1 October in UTC+8 the two
+  // disagreed by a month, and every commit made that morning fell one month
+  // past the end of the window -- so the timeline silently showed 0 commits
+  // while the repo clearly had some. See 191ceba.
+  //
+  // This asserts the invariant directly, without depending on what day the
+  // suite happens to run: whatever "now" is, the window's last bucket must be
+  // the current local month, and a commit dated in that month must land inside.
+  const now = new Date();
+  const localMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+  const localDayIndex = Math.floor(
+    Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86_400_000,
+  );
+  const utcDayIndex = Math.floor(Date.now() / 86_400_000);
+
+  const history = {
+    months: new Map([[localMonth, {
+      commits: 11, merges: 0, authors: new Set(), fileCount: 0, adds: 0, dels: 0,
+    }]]),
+  };
+
+  const t = buildTimeline(history, localDayIndex);
+  assert.equal(t.months.at(-1).month, localMonth,
+    'the newest bucket must be the current local month');
+  assert.equal(t.months.reduce((sum, m) => sum + m.commits, 0), 11,
+    'a commit dated this local month must not fall outside the window');
+
+  // `buildTimeline` now reads `today` as a local-calendar day. During the first
+  // hours of a month in some timezone the UTC day index is yesterday, and
+  // feeding that in must not quietly claim this month -- it would mean the
+  // window had drifted the other way. (Before the fix this direction was
+  // untested; only the "commits vanish" direction showed up.)
+  if (utcDayIndex !== localDayIndex) {
+    const stale = buildTimeline(history, utcDayIndex);
+    assert.notEqual(stale.months.at(-1).month, localMonth,
+      'yesterday\'s day index must not be read as the current month');
+  }
+});
+
+test('the timeline window is consecutive and covers the requested span', () => {
+  const t = buildTimeline({ months: new Map() }, Math.floor(Date.now() / 86_400_000), 12);
+  assert.equal(t.months.length, 12);
+  for (let i = 1; i < t.months.length; i += 1) {
+    const [py, pm] = t.months[i - 1].month.split('-').map(Number);
+    const [cy, cm] = t.months[i].month.split('-').map(Number);
+    assert.equal(cy * 12 + cm, py * 12 + pm + 1, `${t.months[i - 1].month} -> ${t.months[i].month}`);
+  }
+  assert.ok(t.months.every((m) => m.commits === 0), 'an empty history yields an empty series');
 });
