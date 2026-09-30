@@ -18,6 +18,20 @@ import { History, toDayIndex, toMonth, authorKey, recencyBucket } from './histor
 
 const MS_PER_DAY = 86_400_000;
 
+/**
+ * Days since the epoch, counted in the *local* calendar.
+ *
+ * `Math.floor(Date.now() / MS_PER_DAY)` counts UTC days, so at 00:30 on
+ * 1 October in UTC+8 it was still 30 September UTC and returned the previous
+ * day's index. Anywhere downstream that compares this against a git
+ * `YYYY-MM-DD` date -- which git renders in local time -- the two disagreed
+ * for the first few hours of every month.
+ */
+function localDayIndex() {
+  const d = new Date();
+  return Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / MS_PER_DAY);
+}
+
 /** Risk weights. They sum to 1 and are asserted in tests so they stay honest. */
 export const RISK_WEIGHTS = {
   churn: 0.20,
@@ -52,7 +66,7 @@ function percentile(sorted, p) {
  * @returns {object} report
  */
 export function buildReport({ records, history, coupling, now, limit = 20 }) {
-  const today = now ?? Math.floor(Date.now() / MS_PER_DAY);
+  const today = now ?? localDayIndex();
   const index = new Map(records.map((r) => [r.rel, r]));
 
   // Files that participate in at least one import cycle. Local, never module
@@ -500,11 +514,24 @@ export function buildTimeline(history, today, months = 26) {
   // Step by calendar months, not by 30-day chunks. Thirty-day steps drift: a
   // 26-point series built that way eventually produces two buckets for the same
   // month and misses another entirely, which silently mislabels the sparkline.
-  const end = new Date(today * MS_PER_DAY);
+  //
+  // `today` is a day number counted from the epoch, so `new Date(today * MS)`
+  // lands on UTC midnight. Reading its calendar fields with getUTC*() matches
+  // that, but commit months come from git's `YYYY-MM-DD`, which is rendered in
+  // the commit's *local* timezone -- so the two disagreed at month boundaries.
+  // Concretely: at 00:30 on 1 October in UTC+8, a fresh commit is dated
+  // 2026-10 locally while `today` was still 30 September UTC, putting the
+  // newest commit one month past the end of the window. It vanished from the
+  // timeline, and the "every commit lands in exactly one month" invariant broke.
+  //
+  // Fix: reconstruct a local-calendar date from `today` and read local fields.
+  // Both sides now speak the same calendar.
+  const base = new Date(today * MS_PER_DAY);
+  const end = new Date(base.getFullYear(), base.getMonth(), 1);
   // Absolute month index, so stepping back never has to reason about borrowing
   // across a year boundary. (Subtracting from a raw month number and taking
   // `% 12` afterwards is wrong in JavaScript: `-1 % 12` is `-1`, not `11`.)
-  const endIndex = end.getUTCFullYear() * 12 + end.getUTCMonth();
+  const endIndex = end.getFullYear() * 12 + end.getMonth();
   const buckets = [];
   for (let i = months - 1; i >= 0; i -= 1) {
     const index = endIndex - i;
