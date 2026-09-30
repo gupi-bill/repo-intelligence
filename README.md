@@ -253,6 +253,23 @@ asserts the streaming parser sees byte-for-byte what `git log` sees.
 
 - [docs/METRICS.md](docs/METRICS.md) — every metric, its formula, and where it breaks down
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — module map, the git wire format, and the performance work
+- [docs/EXAMPLE.md](docs/EXAMPLE.md) — `oc` run against `oc` itself, unedited, including the parts that are unflattering and the three limitations that make this repo too small to trust
+
+## Sibling project
+
+Same author, same premise (zero-dependency terminal tools):
+
+- **[sift](https://github.com/gupi-bill/sift)** — fuzzy file search, content
+  grep, frequency-based directory jumping, and command history, in one folder
+  with no `requirements.txt` and no `node_modules`. Pure Python 3.9+ stdlib,
+  so it runs anywhere Python does — someone's server, a throwaway container, a
+  laptop from five years out. 85 unit tests plus 19 real-pty keyboard tests.
+  ```bash
+  git clone https://github.com/gupi-bill/sift && cd sift && ./install.sh
+  ```
+
+Both are written in different languages on purpose: a shared codebase would
+mean shared constraints, and the point of each is to have none.
 
 ## Limitations
 
